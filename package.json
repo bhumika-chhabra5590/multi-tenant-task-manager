@@ -1,0 +1,16 @@
+{
+  "name": "multi-tenant-task-manager",
+  "version": "1.0.0",
+  "description": "Multi-Tenant Task Management System - TypeScript & FastAPI & PostgreSQL/Supabase",
+  "main": "dist/task-a-typescript/src/index.js",
+  "scripts": {
+    "build:ts": "tsc -p task-a-typescript/tsconfig.json",
+    "test:ts": "tsx --test task-a-typescript/tests/taskService.test.ts",
+    "test:py": "pytest task-b-fastapi/tests -v"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0"
+  }
+}
