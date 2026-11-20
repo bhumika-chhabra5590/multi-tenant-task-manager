@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS companies (
 -- it serves as the user identifier.
 CREATE TABLE IF NOT EXISTS users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    auth_user_id UUID UNIQUE REFERENCES auth.users(id) ON DELETE SET NULL,
     company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
     email VARCHAR(255) NOT NULL UNIQUE CHECK (email ~* '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$'),
     full_name VARCHAR(255) NOT NULL CHECK (char_length(trim(full_name)) > 0),
@@ -75,7 +76,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     CONSTRAINT fk_tasks_assigned_to_company_user
         FOREIGN KEY (company_id, assigned_to)
         REFERENCES users(company_id, id)
-        ON DELETE SET NULL,
+        ON DELETE RESTRICT,
 
     CONSTRAINT fk_tasks_created_by_company_user
         FOREIGN KEY (company_id, created_by)

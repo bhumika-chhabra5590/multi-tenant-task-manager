@@ -49,11 +49,24 @@ def get_tasks(
         default=None,
         description="Filter tasks by assigned user ID",
     ),
+    limit: Optional[int] = Query(
+        default=None,
+        ge=1,
+        le=100,
+        description="Pagination limit",
+    ),
+    offset: Optional[int] = Query(
+        default=None,
+        ge=0,
+        description="Pagination offset",
+    ),
 ) -> TaskListResponse:
     return service.get_tasks(
         user=current_user,
         status=task_status,
         assigned_to=assigned_to,
+        limit=limit,
+        offset=offset,
     )
 
 

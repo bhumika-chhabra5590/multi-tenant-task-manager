@@ -1,333 +1,402 @@
-# Multi-Tenant Task Management System
+# Multi-Tenant Task Management API (Supabase & FastAPI)
 
-A production-grade, multi-tenant task management system designed for a multi-company environment. Built with **TypeScript**, **Python / FastAPI**, and **PostgreSQL / Supabase** with Row Level Security (RLS).
+A secure, production-grade, backend-only multi-tenant task management system designed for multi-company isolation and Role-Based Access Control (RBAC). Integrated with **Supabase Authentication**, **FastAPI**, **Supabase PostgreSQL**, and **PostgreSQL Row Level Security (RLS)**.
 
 ---
 
 ## 📋 Table of Contents
 
-- [Overview & Scenario](#overview--scenario)
-- [System Architecture](#system-architecture)
-- [Project Structure](#project-structure)
-- [Task A – TypeScript Module](#task-a--typescript-module)
-- [Task B – Python / FastAPI REST API](#task-b--python--fastapi-rest-api)
-- [Task C – Supabase / PostgreSQL Database & RLS](#task-c--supabase--postgresql-database--rls)
-- [Multi-Tenant Data Security & Anti-Tampering](#multi-tenant-data-security--anti-tampering)
-- [Setup & Installation](#setup--installation)
-- [Running Test Suites](#running-test-suites)
+- [Architecture & Authentication Flow](#-architecture--authentication-flow)
+- [Directory Structure](#-directory-structure)
+- [Technology Stack](#-technology-stack)
+- [Multi-Tenant Data Model & Security Boundaries](#-multi-tenant-data-model--security-boundaries)
+- [Setup & Configuration Guide](#-setup--configuration-guide)
+  - [1. Environment Configuration](#1-environment-configuration)
+  - [2. Supabase Migration & Database Setup](#2-supabase-migration--database-setup)
+  - [3. Supabase Auth User Setup & Profile Mapping](#3-supabase-auth-user-setup--profile-mapping)
+- [Running the Backend (Windows PowerShell)](#-running-the-backend-windows-powershell)
+- [Obtaining Access Tokens (CLI Helper)](#-obtaining-access-tokens-cli-helper)
+- [Testing via Swagger UI (Bearer Authentication)](#-testing-via-swagger-ui-bearer-authentication)
+- [Automated Testing](#-automated-testing)
+  - [TypeScript Tests (Task A)](#typescript-tests-task-a)
+  - [FastAPI Mocked Tests (Task B)](#fastapi-mocked-tests-task-b)
+  - [Real Supabase Integration Tests (Opt-In)](#real-supabase-integration-tests-opt-in)
+- [Demonstrating Multi-Tenant Isolation](#-demonstrating-multi-tenant-isolation)
+- [Known Limitations & Design Disclosures](#-known-limitations--design-disclosures)
 
 ---
 
-## 🏢 Overview & Scenario
+## 🏛️ Architecture & Authentication Flow
 
-The system models a multi-company SaaS platform:
-1. **Multi-Tenancy**: Data is strictly partitioned by Company. Users in Company A cannot see or manipulate tasks in Company B.
-2. **Role-Based Access Control (RBAC)**:
-   - **Managers**: Can create and assign tasks to employees within their company, view all company tasks, and update any company task.
-   - **Employees**: Can view tasks in their company, and update the status of tasks assigned specifically to them.
-3. **Data Security**: Defense-in-depth across Application and Database layers prevents parameter tampering, IDOR, and tenant data leaks.
+This is a **strictly backend-only** application. OpenAPI / Swagger UI (`/docs`) serves as the interactive client.
 
----
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as User / Swagger UI
+    participant Auth as Supabase Auth Server
+    participant API as FastAPI Backend
+    participant DB as Supabase PostgreSQL + RLS
 
-## 🏗️ System Architecture
-
+    User->>Auth: Sign in (email & password)
+    Auth-->>User: Issues JWT access token (Bearer)
+    User->>API: HTTP Request with Header: Authorization: Bearer <access_token>
+    API->>Auth: Cryptographic Token Verification (auth.get_user(jwt))
+    Auth-->>API: Verified Auth UUID (auth.users.id)
+    API->>DB: Query public.users where auth_user_id = auth.users.id
+    DB-->>API: Application Profile (profile_id, company_id, role, full_name)
+    Note over API: Single Source of Truth:<br/>company_id & role derived strictly from DB profile
+    API->>DB: Execute Query using user's access token (PostgREST + RLS)
+    Note over DB: PostgreSQL RLS evaluates:<br/>get_current_user_company_id()<br/>is_company_manager()<br/>get_current_user_profile_id()
+    DB-->>API: Filtered Tenant Records
+    API-->>User: HTTP 200/201 Response (Clean JSON payload)
 ```
-                                  [ CLIENT REQUEST ]
-                                          │
-                                          ▼
-                ┌──────────────────────────────────────────────────┐
-                │             FastAPI Application Layer            │
-                │  - Auth Dependency: Cryptographic User Context   │
-                │  - Pydantic v2: Strict Request Validation        │
-                │  - Service Layer: RBAC & State Transition Rules  │
-                │  - Repository: Tenant-Scoped Queries             │
-                └─────────────────────────┬────────────────────────┘
-                                          │
-                                          ▼
-                ┌──────────────────────────────────────────────────┐
-                │          PostgreSQL / Supabase Database          │
-                │  - Row Level Security (FORCE RLS)                │
-                │  - Composite FKs: (company_id, assigned_to)      │
-                │  - Optimized Multi-Tenant B-Tree Indexes         │
-                │  - Automated updated_at Triggers                 │
-                └──────────────────────────────────────────────────┘
-```
 
 ---
 
-## 📁 Project Structure
+## 📁 Directory Structure
 
 ```
 multi-tenant-task-manager/
-├── README.md                          # Comprehensive documentation & setup instructions
+├── .env.example                       # Environment template with placeholders
+├── .gitignore                         # Protects .env, build artifacts, and caches
+├── pytest.ini                         # Pytest configuration and warning filters
 ├── package.json                       # TypeScript test & build scripts
-├── tsconfig.json                      # Strict TypeScript compiler configuration
+├── tsconfig.json                      # Strict TypeScript compiler options
+├── README.md                          # Production architecture & operations documentation
 ├── task-a-typescript/                 # Task A: TypeScript Library
 │   ├── src/
-│   │   ├── types.ts                   # Interfaces, Enums, and Custom Error hierarchy
+│   │   ├── types.ts                   # Interfaces, Enums, Custom Errors, FetchTasksOptions
 │   │   ├── taskService.ts             # filterByStatus, calculateCompletionPercentage, fetchTasks
-│   │   └── index.ts                   # Public module exports
+│   │   └── index.ts                   # Public exports
 │   └── tests/
-│       └── taskService.test.ts        # Comprehensive unit tests (18 tests)
+│       └── taskService.test.ts        # Automated unit tests (22 tests passing)
 ├── task-b-fastapi/                    # Task B: Python / FastAPI REST API
+│   ├── requirements.txt               # Pinned dependencies (fastapi, supabase, pydantic, etc.)
 │   ├── app/
-│   │   ├── main.py                    # App entry point, CORS, and HTTP exception handlers
-│   │   ├── config.py                  # Environment & App configuration
+│   │   ├── main.py                    # App entrypoint, CORS, exception handlers
+│   │   ├── config.py                  # Settings (Supabase URL, publishable key, env)
 │   │   ├── core/
-│   │   │   ├── auth.py                # Authentication, tenant derivation & anti-spoofing
+│   │   │   ├── auth.py                # Supabase Auth verification, profile derivation, HTTPBearer
+│   │   │   ├── supabase_client.py     # Request-scoped concurrency-safe client factory
 │   │   │   └── exceptions.py          # Domain-level exception hierarchy
 │   │   ├── schemas/
-│   │   │   ├── task.py                # Pydantic v2 schemas (TaskCreate, TaskResponse, etc.)
-│   │   │   └── user.py                # Company & User response schemas
+│   │   │   ├── task.py                # Pydantic v2 validation models (TaskCreate, TaskResponse)
+│   │   │   └── user.py                # User and Company schemas
 │   │   ├── models/
-│   │   │   └── domain.py              # Domain entities
+│   │   │   └── domain.py              # Domain dataclasses
 │   │   ├── repositories/
-│   │   │   └── task_repository.py     # Tenant-scoped data access layer
+│   │   │   ├── task_repository.py     # Repository protocol and provider
+│   │   │   ├── supabase_task_repository.py  # Production Supabase PostgREST repository
+│   │   │   └── in_memory_task_repository.py # Test double for isolated unit tests
 │   │   ├── services/
-│   │   │   └── task_service.py        # Business logic, RBAC, and lifecycle state machine
+│   │   │   └── task_service.py        # RBAC, tenant isolation, and task state machine
 │   │   └── api/
-│   │       ├── deps.py                # Dependency injection (Auth & Services)
+│   │       ├── deps.py                # Dependency injection for current user & task service
 │   │       └── v1/
-│   │           └── tasks.py           # REST endpoints (POST, GET, PATCH)
-│   ├── tests/
-│   │   ├── conftest.py                # Pytest fixtures and mock tenant users
-│   │   └── test_tasks_api.py          # Unit & integration tests (17 tests)
-│   └── requirements.txt               # Pinned Python dependencies
-└── task-c-database/                   # Task C: Database, SQL & RLS
-    ├── schema.sql                     # Tables, constraints, composite FKs, triggers, indexes
-    ├── rls.sql                        # Row Level Security policies & security definer functions
-    ├── queries.sql                    # Parameterized queries (fetch by company, completed vs pending)
-    ├── seed.sql                       # Multi-tenant mock data (Acme & Beta Robotics)
+│   │           └── tasks.py           # REST route handlers (POST, GET, PATCH)
+│   ├── scripts/
+│   │   └── get_access_token.py        # Secure CLI helper to obtain JWT access tokens
+│   └── tests/
+│       ├── conftest.py                # Pytest fixtures and mock users
+│       ├── test_tasks_api.py          # Mocked authorization & API unit tests (22 tests)
+│       └── test_supabase_live.py      # Opt-in live Supabase integration tests
+└── task-c-database/                   # Task C: PostgreSQL / Supabase Database & Security
+    ├── migrations/
+    │   └── 002_supabase_auth_integration.sql # Safe additive migration for hosted Supabase
+    ├── scripts/
+    │   └── map_auth_users.sql         # SQL mapping template for the 5 demo users
+    ├── schema.sql                     # Base tables, constraints, composite FKs, triggers, indexes
+    ├── rls.sql                        # Base Row Level Security policies
+    ├── queries.sql                    # Parameterized operational & analytical queries
+    ├── seed.sql                       # Seed data for Acme Innovations & Beta Robotics
     └── security_architecture.md       # In-depth security analysis on parameter tampering defense
 ```
 
 ---
 
-## 🟦 Task A – TypeScript Module
+## 🛠️ Technology Stack
 
-Located in `task-a-typescript/src/`.
-
-### 1. Types & Interfaces (`types.ts`)
-- **Enums & Types**: `TaskStatus` (`pending`, `in_progress`, `completed`, `cancelled`), `TaskPriority`, `UserRole`.
-- **Core Entities**: `Company`, `User`, `Task`.
-- **Options & Payloads**: `TaskFilterOptions`, `CompletionPercentageOptions`, `FetchTasksParams`, `FetchTasksOptions`.
-- **Custom Error Hierarchy**:
-  - `TaskServiceError` (base)
-  - `ApiError` (contains `statusCode` and response details)
-  - `NetworkError` (handles connection failures)
-  - `TimeoutError` (handles request cancellation / aborts)
-  - `ValidationError` (schema mismatch and invalid input reporting)
-
-### 2. Core Functions (`taskService.ts`)
-
-#### `filterTasksByStatus(tasks: Task[], status: TaskStatus | TaskStatus[]): Task[]`
-Filters tasks matching a single status or multiple statuses with runtime validation.
-```typescript
-const inFlight = filterTasksByStatus(tasks, ['pending', 'in_progress']);
-```
-
-#### `calculateCompletionPercentage(tasks: Task[], options?: CompletionPercentageOptions): number`
-Calculates completion percentage with support for:
-- Empty array protection (returns `0` instead of `NaN` / division by zero).
-- `excludeCancelled`: Option to omit cancelled tasks from total denominator.
-- `decimalPrecision`: Configurable decimal rounding (defaults to `2`).
-```typescript
-const rate = calculateCompletionPercentage(tasks, { excludeCancelled: true, decimalPrecision: 1 });
-```
-
-#### `fetchTasks(options?: FetchTasksOptions): Promise<Task[]>`
-Asynchronous API consumer supporting:
-- Multi-tenant query parameter serialization (`companyId`, `status`, `assignedTo`, `limit`).
-- Configurable timeout and `AbortSignal` cancellation.
-- Custom `fetch` dependency injection (enables testing and isomorphic support).
-- Response unwrapping (supports both direct arrays and `{ items: [...] }` envelopes).
-- Runtime schema validation throwing typed `ValidationError` on malformed payloads.
+- **Runtime**: Python 3.10+ (tested on Python 3.14) & Node.js 20+ (tested on Node.js 24)
+- **Web Framework**: FastAPI 0.115+
+- **Database & Auth**: Supabase (PostgreSQL 15+, GoTrue Auth, PostgREST)
+- **Data Validation**: Pydantic v2.14+
+- **TypeScript**: TypeScript 5.7+ with strict typing and `NodeNext` resolution
+- **Testing**: Pytest 9+ (Python) and Node.js Test Runner / `tsx` (TypeScript)
 
 ---
 
-## 🐍 Task B – Python / FastAPI REST API
+## 🛡️ Multi-Tenant Data Model & Security Boundaries
 
-Located in `task-b-fastapi/app/`.
+### Two Distinct Identifiers: Auth UID vs. Profile UUID
+A critical security distinction in this architecture:
+1. **Supabase Auth UID** (`auth.users.id` / `auth.uid()`): The cryptographic user identity generated when an employee or manager logs in.
+2. **Application Profile ID** (`public.users.id`): The internal UUID used within the application schema, referenced by `tasks.created_by` and `tasks.assigned_to`.
 
-### 1. Endpoints
+The bridge is `public.users.auth_user_id`:
+```
+auth.users (auth.uid())  ───[1:1 via auth_user_id]───>  public.users.id (Profile ID)
+```
 
-| Method | Path | Summary | Auth Required | Description |
+### Zero-Trust Tenancy Principles
+- **No Client Trust**: The API **never** accepts `company_id` from client payloads or headers.
+- **Single Source of Truth**: The user's `company_id` and `role` are read directly from `public.users` after cryptographically validating the JWT with `supabase.auth.get_user(jwt)`.
+- **Database Row Level Security (RLS)**: Requests forward the user's access token to PostgREST. PostgreSQL enforces `get_current_user_company_id()`, `is_company_manager()`, and `get_current_user_profile_id()`.
+- **Composite Foreign Key**: `(company_id, assigned_to) REFERENCES users(company_id, id)` ensures cross-company task assignment is physically impossible at the database engine level.
+
+---
+
+## 🚀 Setup & Configuration Guide
+
+### 1. Environment Configuration
+
+Copy the template file to `.env`:
+```powershell
+Copy-Item .env.example .env
+```
+
+Open `.env` and configure your Supabase credentials (found in Supabase Dashboard -> **Project Settings** -> **API**):
+```ini
+SUPABASE_URL=https://your-project-id.supabase.co
+SUPABASE_PUBLISHABLE_KEY=your-publishable-or-anon-key-here
+APP_ENV=development
+```
+> [!IMPORTANT]
+> Never use or commit a `service_role` or secret key. All ordinary queries run using the user's verified JWT and the publishable/anon key.
+
+---
+
+### 2. Supabase Migration & Database Setup
+
+Since the initial `schema.sql`, `seed.sql`, and `rls.sql` have already been executed on your hosted Supabase project, apply the **safe, additive migration**:
+
+1. Open the **Supabase Dashboard** -> **SQL Editor**.
+2. Open [`task-c-database/migrations/002_supabase_auth_integration.sql`](file:///d:/multi-tenant-task-manager/task-c-database/migrations/002_supabase_auth_integration.sql).
+3. Copy its contents and click **Run**.
+
+**What this migration does:**
+- Safely adds `auth_user_id UUID UNIQUE REFERENCES auth.users(id)` to `public.users`.
+- Replaces security helper functions with `SECURITY DEFINER SET search_path = ''` resolving identities via `auth.uid() -> public.users.auth_user_id -> public.users.id`.
+- Upgrades RLS policies for `companies`, `users`, and `tasks`.
+- Preserves all existing seed data.
+
+---
+
+### 3. Supabase Auth User Setup & Profile Mapping
+
+The seeded database contains 5 demo profiles:
+
+| Company | Role | Full Name | Email Address | Profile UUID |
 |---|---|---|---|---|
-| `POST` | `/tasks` | Create Task | Manager | Creates a task for the manager's company. Validates assignee belongs to same company. |
-| `GET` | `/tasks` | Retrieve Tasks | Manager / Employee | Retrieves tasks strictly within user's company. Calculates completion metrics. |
-| `PATCH` | `/tasks/{id}` | Update Task Status | Assigned Employee / Manager | Updates status. Enforces valid lifecycle transitions and RBAC permissions. |
-| `GET` | `/health` | Health Check | Public | Returns service health status. |
+| **Company Alpha** (Acme) | Manager | Alice Manager | `alice.manager@acme.com` | `a1111111-1111-1111-1111-111111111111` |
+| **Company Alpha** (Acme) | Employee | Bob Developer | `bob.developer@acme.com` | `a2222222-2222-2222-2222-222222222222` |
+| **Company Alpha** (Acme) | Employee | Carol Designer | `carol.designer@acme.com` | `a3333333-3333-3333-3333-333333333333` |
+| **Company Beta** (Beta Robotics) | Manager | David Manager | `david.manager@betarobotics.com` | `b1111111-1111-1111-1111-111111111111` |
+| **Company Beta** (Beta Robotics) | Employee | Eve Engineer | `eve.engineer@betarobotics.com` | `b2222222-2222-2222-2222-222222222222` |
 
-### 2. HTTP Status Code Conventions
-- `201 Created`: Successfully created a new task.
-- `200 OK`: Successful retrieval or update.
-- `400 Bad Request`: Business rule violation (e.g. cross-company assignment) or illegal status transition.
-- `401 Unauthorized`: Missing or invalid authentication credentials (`X-User-Id`).
-- `403 Forbidden`: Insufficient role permissions (e.g. employee attempting to create task) or tenant header mismatch.
-- `404 Not Found`: Task does not exist **or belongs to another tenant** (anti-enumeration).
-- `422 Unprocessable Entity`: Pydantic payload validation failure (e.g. blank title, invalid enum).
-
-### 3. Separation of Concerns
-The FastAPI application adheres to strict layered architecture:
-- **Routes (`api/v1/tasks.py`)**: Thin HTTP transport layer handling HTTP status codes, query parameters, and response serialization.
-- **Dependencies (`api/deps.py`)**: Injects authenticated `AuthUser` and `TaskService`.
-- **Services (`services/task_service.py`)**: Encapsulates business logic, RBAC, tenant isolation, and task state machine.
-- **Repositories (`repositories/task_repository.py`)**: Data access layer enforcing tenant filtering on every query.
-- **Schemas (`schemas/task.py`)**: Pydantic v2 validation models.
-
----
-
-## 🐘 Task C – Supabase / PostgreSQL Database & RLS
-
-Located in `task-c-database/`.
-
-### 1. Relational Schema (`schema.sql`)
-- **Entities**:
-  - `companies`: Primary tenant table (`id`, `name`, `created_at`, `updated_at`).
-  - `users`: Employees & managers scoped by `company_id`.
-  - `tasks`: Tasks scoped by `company_id`, `created_by`, `assigned_to`.
-- **Composite Foreign Key Guarantee**:
-  ```sql
-  CONSTRAINT fk_tasks_assigned_to_company_user
-      FOREIGN KEY (company_id, assigned_to)
-      REFERENCES users(company_id, id)
-      ON DELETE SET NULL
-  ```
-  *This constraint physically prohibits a task in Company A from being assigned to an employee in Company B at the database schema level.*
-
-### 2. Row Level Security (`rls.sql`)
-- Enabled with `FORCE ROW LEVEL SECURITY` on all tenant tables.
-- Helper functions:
-  - `get_current_user_company_id()`: Extracts tenant UUID from JWT claims or user record with `SECURITY DEFINER` and `STABLE` caching.
-  - `is_company_manager()`: Verifies if the authenticated user has the `manager` role.
-- Policies:
-  - **SELECT**: Managers view all tasks in their company; Employees view assigned tasks.
-  - **INSERT**: Only managers can insert tasks within their verified company.
-  - **UPDATE**: Managers can update any company task; Employees can update their assigned tasks.
-  - **DELETE**: Only managers can delete tasks within their company.
-
-### 3. Optimized Queries (`queries.sql`)
-- **Fetch Tasks by Company**: Parameterized query joining assignee and creator details.
-- **Count Completed & Pending**: Uses PostgreSQL conditional aggregation:
-  ```sql
-  SELECT
-      COUNT(*) AS total_tasks,
-      COUNT(*) FILTER (WHERE status = 'completed') AS completed_tasks,
-      COUNT(*) FILTER (WHERE status = 'pending') AS pending_tasks,
-      ROUND((COUNT(*) FILTER (WHERE status = 'completed')::NUMERIC / NULLIF(COUNT(*), 0)) * 100, 2) AS completion_percentage
-  FROM tasks
-  WHERE company_id = :company_id;
-  ```
-
----
-
-## 🛡️ Multi-Tenant Data Security & Anti-Tampering
-
-For complete technical documentation, see [`task-c-database/security_architecture.md`](file:///task-c-database/security_architecture.md).
-
-### How the system prevents cross-tenant access if a user manipulates parameters:
-
-1. **Zero Client Trust for Tenant Keys**:
-   The API does **not** accept `company_id` in request bodies (`TaskCreate`). Tenant identity is derived exclusively from the verified server-side authentication context (`AuthUser.company_id`).
-2. **Anti-Spoofing Header Guard**:
-   If a client injects a custom `X-Company-Id` header that contradicts their authenticated identity, the request is terminated with `403 Forbidden`.
-3. **Defense Against IDOR (Insecure Direct Object References)**:
-   When modifying or fetching `/tasks/{id}`, the repository executes:
-   ```python
-   task = repo.get_by_id(task_id=id, company_id=user.company_id)
+#### Steps to Create Auth Users in Supabase Dashboard:
+1. Go to **Authentication** -> **Users** -> Click **Add User** -> **Create User**.
+2. Create each of the 5 users with their exact email address above and a password of your choice (e.g. `TestPass123!`). Check **Auto Confirm Email**.
+3. After creating the users, copy each user's **User UID** (UUID).
+4. Open [`task-c-database/scripts/map_auth_users.sql`](file:///d:/multi-tenant-task-manager/task-c-database/scripts/map_auth_users.sql).
+5. Paste the respective Auth UIDs into the placeholders:
+   ```sql
+   UPDATE public.users SET auth_user_id = '<AUTH_UUID_FOR_ALICE>'::UUID WHERE email = 'alice.manager@acme.com';
+   UPDATE public.users SET auth_user_id = '<AUTH_UUID_FOR_BOB>'::UUID WHERE email = 'bob.developer@acme.com';
+   UPDATE public.users SET auth_user_id = '<AUTH_UUID_FOR_CAROL>'::UUID WHERE email = 'carol.designer@acme.com';
+   UPDATE public.users SET auth_user_id = '<AUTH_UUID_FOR_DAVID>'::UUID WHERE email = 'david.manager@betarobotics.com';
+   UPDATE public.users SET auth_user_id = '<AUTH_UUID_FOR_EVE>'::UUID WHERE email = 'eve.engineer@betarobotics.com';
    ```
-   If an attacker in Company A provides an ID belonging to Company B, the query returns `None`, resulting in a **404 Not Found**. This prevents attackers from enumerating valid IDs across other companies.
-4. **Database-Level Row Level Security (RLS)**:
-   Even in the event of an application-layer bug or direct SQL execution, PostgreSQL RLS silently filters out all rows where `company_id != get_current_user_company_id()`.
+6. Run the script in the Supabase SQL Editor.
 
 ---
 
-## 🚀 Setup & Installation
+## 💻 Running the Backend (Windows PowerShell)
 
-### Prerequisites
-- **Node.js** v20+ / v22+ / v24+
-- **Python** 3.10+ (tested on Python 3.14)
-- **PostgreSQL 14+** (or Supabase instance)
-
-### 1. Clone & TypeScript Setup
+### Prerequisites & Python Virtual Environment
 ```powershell
-# Install Node dependencies
-npm install
+# Activate Python virtual environment
+.\.venv\Scripts\Activate.ps1
 
-# Build TypeScript
-npm run build:ts
-```
-
-### 2. Python / FastAPI Setup
-```powershell
-# Create and activate Python virtual environment
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1   # On Windows
-# source .venv/bin/activate     # On Linux / macOS
-
-# Install Python requirements
+# Install / update requirements
 pip install -r task-b-fastapi/requirements.txt
 ```
 
-### 3. Run the FastAPI Development Server
+### Start the FastAPI Server
 ```powershell
-$env:PYTHONPATH="task-b-fastapi"
-.\.venv\Scripts\uvicorn.exe app.main:app --reload --port 8000
+uvicorn app.main:app --port 8000 --app-dir task-b-fastapi --reload
 ```
-Interactive API documentation will be available at:
-- Swagger UI: `http://localhost:8000/docs`
-- ReDoc: `http://localhost:8000/redoc`
+Output:
+```
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+INFO:     Started reloader process
+INFO:     Application startup complete.
+```
 
 ---
 
-## 🧪 Running Test Suites
+## 🔑 Obtaining Access Tokens (CLI Helper)
 
-Both test suites are automated and require no external services or live databases.
+Use the built-in command-line script to log in as any user and generate an access token for testing:
 
-### Run TypeScript Tests (Task A)
+```powershell
+.\.venv\Scripts\python.exe task-b-fastapi/scripts/get_access_token.py
+```
+
+Prompts:
+```
+Enter Supabase Auth Email: alice.manager@acme.com
+Enter Supabase Auth Password: ********
+
+======================================================================
+AUTHENTICATION SUCCESSFUL!
+======================================================================
+User Email   : alice.manager@acme.com
+Auth UID     : 8f42c123-4567-890a-bcde-f1234567890a
+----------------------------------------------------------------------
+BEARER ACCESS TOKEN (Copy and paste into Swagger UI 'Authorize' modal):
+----------------------------------------------------------------------
+eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+======================================================================
+```
+
+---
+
+## 🌐 Testing via Swagger UI (Bearer Authentication)
+
+1. Open your browser and navigate to: **[http://localhost:8000/docs](http://localhost:8000/docs)**
+2. Click the green **Authorize 🔒** button at the top right.
+3. In the **Value** field, paste the JWT access token obtained from `get_access_token.py` (do not type "Bearer", Swagger adds it automatically).
+4. Click **Authorize**, then **Close**.
+
+Now, every request executed in Swagger UI automatically sends:
+```http
+Authorization: Bearer <access_token>
+```
+
+---
+
+## 🧪 Automated Testing
+
+### TypeScript Tests (Task A)
+Tests filtering, completion percentage calculations, envelope unwrapping, runtime schema validation, Authorization Bearer header inclusion, and snake_case to camelCase conversion.
+
 ```powershell
 npm run test:ts
 ```
-**Expected Output:**
+Expected output:
 ```
 ✔ Task A: TypeScript Task Management Module
-  ✔ filterTasksByStatus()
-  ✔ calculateCompletionPercentage()
-  ✔ fetchTasks()
-ℹ tests 18
-ℹ pass 18
-ℹ fail 0
+  ✔ filterTasksByStatus() (4 tests passed)
+  ✔ calculateCompletionPercentage() (7 tests passed)
+  ✔ fetchTasks() (11 tests passed)
+ℹ tests 22 | pass 22 | fail 0
 ```
 
-### Run FastAPI Pytest Suite (Task B)
+### TypeScript Type Check & Build
 ```powershell
-$env:PYTHONPATH="task-b-fastapi"
-.\.venv\Scripts\pytest.exe -v task-b-fastapi/tests
+npx tsc --noEmit
+npm run build:ts
 ```
-**Expected Output:**
+
+### FastAPI Mocked Tests (Task B)
+Exhaustive unit test suite covering health, missing token (401), invalid JWT (401), manager permissions, employee permissions, cross-company assignment prevention (400), tenant isolation, metrics calculation, employee-assigned filter lockdown, cross-tenant IDOR (404), state machine transitions, and database error mapping.
+
+```powershell
+pytest -v
 ```
-task-b-fastapi/tests/test_tasks_api.py::test_unauthenticated_request_rejected PASSED
-task-b-fastapi/tests/test_tasks_api.py::test_invalid_user_rejected PASSED
-task-b-fastapi/tests/test_tasks_api.py::test_spoofed_company_header_rejected PASSED
+Expected output:
+```
+task-b-fastapi/tests/test_tasks_api.py::test_health_endpoint PASSED
+task-b-fastapi/tests/test_tasks_api.py::test_missing_bearer_token_rejected PASSED
+task-b-fastapi/tests/test_tasks_api.py::test_invalid_bearer_token_rejected PASSED
+task-b-fastapi/tests/test_tasks_api.py::test_valid_manager_authentication PASSED
+task-b-fastapi/tests/test_tasks_api.py::test_valid_employee_authentication PASSED
 task-b-fastapi/tests/test_tasks_api.py::test_manager_can_create_task PASSED
 task-b-fastapi/tests/test_tasks_api.py::test_employee_cannot_create_task PASSED
 task-b-fastapi/tests/test_tasks_api.py::test_manager_cannot_assign_task_to_different_company_employee PASSED
+task-b-fastapi/tests/test_tasks_api.py::test_client_supplied_company_id_cannot_override_tenant PASSED
 task-b-fastapi/tests/test_tasks_api.py::test_create_task_validation_error PASSED
-task-b-fastapi/tests/test_tasks_api.py::test_tenant_data_isolation_between_companies PASSED
+task-b-fastapi/tests/test_tasks_api.py::test_manager_sees_all_own_company_tasks PASSED
+task-b-fastapi/tests/test_tasks_api.py::test_employee_sees_only_assigned_tasks PASSED
+task-b-fastapi/tests/test_tasks_api.py::test_employee_cannot_bypass_assigned_to_filter PASSED
 task-b-fastapi/tests/test_tasks_api.py::test_get_tasks_metrics_calculation PASSED
 task-b-fastapi/tests/test_tasks_api.py::test_get_tasks_filter_by_status PASSED
-task-b-fastapi/tests/test_tasks_api.py::test_get_tasks_filter_by_assignee PASSED
 task-b-fastapi/tests/test_tasks_api.py::test_assigned_employee_can_update_task_status PASSED
-task-b-fastapi/tests/test_tasks_api.py::test_unassigned_employee_cannot_update_task PASSED
+task-b-fastapi/tests/test_tasks_api.py::test_employee_cannot_update_unassigned_task PASSED
 task-b-fastapi/tests/test_tasks_api.py::test_manager_can_update_any_task_in_their_company PASSED
 task-b-fastapi/tests/test_tasks_api.py::test_cross_tenant_patch_manipulation_returns_404 PASSED
 task-b-fastapi/tests/test_tasks_api.py::test_employee_cannot_reopen_completed_task PASSED
 task-b-fastapi/tests/test_tasks_api.py::test_invalid_status_enum_rejected PASSED
-======================== 17 passed in 0.14s ========================
+task-b-fastapi/tests/test_tasks_api.py::test_database_error_handling_returns_500_without_leaks PASSED
+task-b-fastapi/tests/test_tasks_api.py::test_missing_supabase_config_returns_503 PASSED
+task-b-fastapi/tests/test_tasks_api.py::test_task_immutable_fields_cannot_be_altered_via_patch PASSED
+task-b-fastapi/tests/test_tasks_api.py::test_get_tasks_pagination_limit_and_offset PASSED
+======================== 25 passed, 1 skipped in 0.20s ========================
+```
+
+### Real Supabase Integration Tests (Opt-In)
+To run the live integration tests against your actual hosted Supabase project:
+
+```powershell
+$env:RUN_SUPABASE_INTEGRATION_TESTS="1"
+$env:SUPABASE_MGR_ALPHA_TOKEN="<token_from_get_access_token_for_alice>"
+$env:SUPABASE_EMP_ALPHA_TOKEN="<token_from_get_access_token_for_bob>"
+$env:SUPABASE_MGR_BETA_TOKEN="<token_from_get_access_token_for_david>"
+
+pytest task-b-fastapi/tests/test_supabase_live.py -v
 ```
 
 ---
 
-## 📄 License & Attribution
+## 🎯 Demonstrating Multi-Tenant Isolation
 
-Designed and implemented for the Multi-Tenant Task Management API technical assessment. Clean-room implementation with zero external proprietary code.
+### Demonstration 1: Manager Creates a Task
+1. Authenticate in Swagger as Alice (`alice.manager@acme.com`).
+2. Execute `POST /tasks`:
+   ```json
+   {
+     "title": "Q4 Infrastructure Security Review",
+     "priority": "high",
+     "assigned_to": "a2222222-2222-2222-2222-222222222222"
+   }
+   ```
+3. Response: `201 Created`. `company_id` is automatically set to Company Alpha (`a0000000-0000-0000-0000-000000000001`), and `created_by` is Alice's profile ID (`a1111111-1111-1111-1111-111111111111`).
+
+### Demonstration 2: Employee Sees Only Assigned Tasks
+1. Authenticate in Swagger as Bob (`bob.developer@acme.com`).
+2. Execute `GET /tasks`.
+3. Notice that Bob receives **only tasks assigned to him**. Carol's tasks in the same company are hidden.
+4. Try appending `?assigned_to=a3333333-3333-3333-3333-333333333333` (Carol's ID).
+5. The API enforces employee-level assigned scoping and still returns only Bob's tasks.
+
+### Demonstration 3: Employee Updates Task Status
+1. Still authenticated as Bob, execute `PATCH /tasks/a1000000-0000-0000-0000-000000000002`:
+   ```json
+   { "status": "completed" }
+   ```
+2. Response: `200 OK`. Status updated to `completed`.
+3. Try executing `PATCH /tasks/a1000000-0000-0000-0000-000000000003` (Carol's task).
+4. Response: `404 Not Found` (matching RLS policy where unassigned tasks are hidden from employees to prevent resource enumeration).
+
+### Demonstration 4: Database Column Privilege Verification
+To confirm that PostgreSQL strictly prevents employees or managers from modifying protected columns (`role`, `auth_user_id`, `company_id`, `assigned_to`, `created_by`), run [`task-c-database/scripts/verify_permissions.sql`](file:///d:/multi-tenant-task-manager/task-c-database/scripts/verify_permissions.sql) in the Supabase SQL Editor.
+The query confirms that `tasks.status` and `tasks.updated_at` evaluate to `ALLOWED`, while all other columns evaluate to `DENIED`.
+
+### Demonstration 4: Cross-Tenant Isolation (Alpha vs. Beta)
+1. Authenticate in Swagger as David (`david.manager@betarobotics.com`, Manager of Beta).
+2. Execute `GET /tasks`.
+3. Notice that David receives **only Beta Robotics tasks**. Zero Company Alpha tasks appear.
+4. Execute `PATCH /tasks/a1000000-0000-0000-0000-000000000001` (Alpha task ID).
+5. Response: **`404 Not Found`**. The API deliberately returns 404 instead of 403 to prevent cross-tenant resource enumeration.
+
+---
+
+## 🔍 Known Limitations & Design Disclosures
+
+In a technical interview, transparently disclosing architectural trade-offs demonstrates senior engineering maturity:
+
+1. **Token Refresh via Gateway**: The FastAPI backend validates access tokens using server-side Supabase verification. Token refresh (handling expired access tokens via refresh tokens) is expected to be managed by the client or API gateway.
+2. **Synchronous Supabase Client**: The backend uses the official Supabase Python SDK (`supabase-py`). The PostgREST operations use synchronous HTTP calls wrapped in FastAPI thread pools (`def` routes). For high-throughput async workloads, an async client (`AsyncClient`) would be preferred.
+3. **Database Profile Lookup Overhead**: On each authenticated request, the application verifies the token via Supabase Auth and queries `public.users` to obtain the profile. In high-traffic production environments, caching the `auth.uid() -> profile` mapping in Redis with a short TTL (e.g. 5 minutes) minimizes database lookups.
+4. **Task Deletion**: The system deliberately denies `DELETE /tasks` at the RLS policy layer. Task archiving is handled via the `cancelled` status rather than permanent row deletion to preserve audit history.

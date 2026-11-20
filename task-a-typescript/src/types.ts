@@ -61,10 +61,23 @@ export interface CompletionPercentageOptions {
 }
 
 export interface FetchTasksParams {
-  companyId?: string;
+  /**
+   * Filter tasks by lifecycle status
+   */
   status?: TaskStatus;
+  /**
+   * Filter tasks by assignee internal profile UUID.
+   * Mapped automatically to backend query parameter 'assigned_to'.
+   * Note: For employee users, the backend locks visibility strictly to their own profile.
+   */
   assignedTo?: string;
+  /**
+   * Maximum number of tasks to return (1-100)
+   */
   limit?: number;
+  /**
+   * Offset for pagination
+   */
   offset?: number;
 }
 
@@ -74,6 +87,10 @@ export interface FetchTasksOptions {
   headers?: Record<string, string>;
   signal?: AbortSignal;
   timeoutMs?: number;
+  /**
+   * Supabase JWT Bearer access token for authenticated API requests
+   */
+  accessToken?: string;
   /**
    * Custom fetch implementation (allows dependency injection for node/browser/tests)
    */

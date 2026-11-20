@@ -161,10 +161,10 @@ describe('Task A: TypeScript Task Management Module', () => {
   });
 
   describe('fetchTasks()', () => {
-    it('successfully fetches tasks from an API endpoint', async () => {
+    it('successfully fetches tasks from an API endpoint with query parameters', async () => {
+      let capturedUrl = '';
       const mockFetch: typeof fetch = async (input) => {
-        const urlStr = String(input);
-        assert.ok(urlStr.includes('companyId=company-alpha'));
+        capturedUrl = String(input);
         return new Response(JSON.stringify(mockTasks), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
@@ -173,12 +173,25 @@ describe('Task A: TypeScript Task Management Module', () => {
 
       const tasks = await fetchTasks({
         baseUrl: 'https://api.example.com/v1/tasks',
-        params: { companyId: 'company-alpha' },
+        params: {
+          status: 'completed',
+          assignedTo: 'a2222222-2222-2222-2222-222222222222',
+          limit: 10,
+          offset: 20,
+        },
         customFetch: mockFetch,
       });
 
       assert.equal(tasks.length, 4);
       assert.equal(tasks[0]?.title, 'Setup PostgreSQL RLS');
+      // Verify query parameters: status, snake_case assigned_to, limit, and offset
+      assert.ok(capturedUrl.includes('status=completed'));
+      assert.ok(capturedUrl.includes('assigned_to=a2222222-2222-2222-2222-222222222222'));
+      assert.ok(capturedUrl.includes('limit=10'));
+      assert.ok(capturedUrl.includes('offset=20'));
+      // Verify companyId is NOT sent as query parameter (tenant isolation enforced by JWT)
+      assert.ok(!capturedUrl.includes('companyId'));
+      assert.ok(!capturedUrl.includes('company_id'));
     });
 
     it('handles wrapped envelope responses ({ items: [...] })', async () => {
@@ -200,6 +213,112 @@ describe('Task A: TypeScript Task Management Module', () => {
 
       assert.equal(tasks.length, 2);
       assert.equal(tasks[0]?.id, 'task-1');
+    });
+
+    it('sends Authorization Bearer header when accessToken is provided', async () => {
+      let capturedAuthHeader: string | undefined;
+
+      const mockFetch: typeof fetch = async (_input, init) => {
+        const headers = init?.headers as Record<string, string>;
+        capturedAuthHeader = headers?.['Authorization'];
+        return new Response(JSON.stringify(mockTasks), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      };
+
+      await fetchTasks({
+        baseUrl: 'https://api.example.com/v1/tasks',
+        accessToken: 'valid-test-supabase-token',
+        customFetch: mockFetch,
+      });
+
+      assert.equal(capturedAuthHeader, 'Bearer valid-test-supabase-token');
+    });
+
+    it('does not send Authorization header when accessToken is omitted', async () => {
+      let capturedAuthHeader: string | undefined;
+
+      const mockFetch: typeof fetch = async (_input, init) => {
+        const headers = init?.headers as Record<string, string>;
+        capturedAuthHeader = headers?.['Authorization'];
+        return new Response(JSON.stringify(mockTasks), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      };
+
+      await fetchTasks({
+        baseUrl: 'https://api.example.com/v1/tasks',
+        customFetch: mockFetch,
+      });
+
+      assert.equal(capturedAuthHeader, undefined);
+    });
+
+    it('safely converts snake_case API payload to camelCase TypeScript Task model', async () => {
+      const rawApiPayload = [
+        {
+          id: 'b1000000-0000-0000-0000-000000000001',
+          company_id: 'b0000000-0000-0000-0000-000000000002',
+          title: 'Firmware Telemetry',
+          description: 'High-speed motor logging',
+          status: 'in_progress',
+          priority: 'urgent',
+          assigned_to: 'b2222222-2222-2222-2222-222222222222',
+          created_by: 'b1111111-1111-1111-1111-111111111111',
+          due_date: '2026-12-01T12:00:00Z',
+          created_at: '2026-11-20T10:00:00Z',
+          updated_at: '2026-11-20T11:00:00Z',
+        },
+      ];
+
+      const mockFetch: typeof fetch = async () => {
+        return new Response(JSON.stringify(rawApiPayload), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      };
+
+      const tasks = await fetchTasks({
+        baseUrl: 'https://api.example.com/v1/tasks',
+        accessToken: 'test-token',
+        customFetch: mockFetch,
+      });
+
+      assert.equal(tasks.length, 1);
+      const task = tasks[0]!;
+      assert.equal(task.id, 'b1000000-0000-0000-0000-000000000001');
+      assert.equal(task.companyId, 'b0000000-0000-0000-0000-000000000002');
+      assert.equal(task.assignedTo, 'b2222222-2222-2222-2222-222222222222');
+      assert.equal(task.createdBy, 'b1111111-1111-1111-1111-111111111111');
+      assert.equal(task.dueDate, '2026-12-01T12:00:00Z');
+      assert.equal(task.createdAt, '2026-11-20T10:00:00Z');
+      assert.equal(task.updatedAt, '2026-11-20T11:00:00Z');
+    });
+
+    it('throws ApiError with HTTP 401 Unauthorized when credentials are invalid', async () => {
+      const mockFetch: typeof fetch = async () => {
+        return new Response(
+          JSON.stringify({ detail: 'Invalid or expired token' }),
+          { status: 401, statusText: 'Unauthorized' }
+        );
+      };
+
+      await assert.rejects(
+        () =>
+          fetchTasks({
+            baseUrl: 'https://api.example.com/v1/tasks',
+            accessToken: 'invalid-token',
+            customFetch: mockFetch,
+          }),
+        (err: unknown) => {
+          assert.ok(err instanceof ApiError);
+          assert.equal(err.statusCode, 401);
+          assert.ok(err.message.includes('401 Unauthorized'));
+          return true;
+        }
+      );
     });
 
     it('throws ApiError with HTTP status on 403 Forbidden or 404 Not Found', async () => {

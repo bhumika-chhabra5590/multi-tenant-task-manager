@@ -4,9 +4,10 @@
   "description": "Multi-Tenant Task Management System - TypeScript & FastAPI & PostgreSQL/Supabase",
   "main": "dist/task-a-typescript/src/index.js",
   "scripts": {
-    "build:ts": "tsc -p task-a-typescript/tsconfig.json",
+    "build:ts": "tsc -p tsconfig.json",
     "test:ts": "tsx --test task-a-typescript/tests/taskService.test.ts",
-    "test:py": "pytest task-b-fastapi/tests -v"
+    "test:py": ".\\.venv\\Scripts\\pytest.exe -v",
+    "test": "npm run test:ts && npm run test:py"
   },
   "devDependencies": {
     "typescript": "^5.7.0",

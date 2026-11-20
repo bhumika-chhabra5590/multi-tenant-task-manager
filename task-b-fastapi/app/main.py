@@ -11,20 +11,32 @@ from app.core.exceptions import (
     InvalidStateTransitionError,
     TenantViolationError,
 )
+from app.core.supabase_client import SupabaseConfigurationError
+from app.repositories.supabase_task_repository import DatabaseOperationError
 
 app = FastAPI(
     title=settings.app_name,
     version=settings.app_version,
-    description="Multi-Tenant Task Management REST API with strict tenant isolation and RBAC.",
+    description=(
+        "Production-grade Multi-Tenant Task Management REST API integrated with "
+        "Supabase Authentication, PostgreSQL, and Row Level Security (RLS)."
+    ),
 )
 
-# CORS Middleware
+# CORS Middleware restricted to documented local development origins
+ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept"],
 )
 
 
@@ -73,6 +85,26 @@ async def business_rule_violation_handler(
     )
 
 
+@app.exception_handler(DatabaseOperationError)
+async def database_operation_error_handler(
+    request: Request, exc: DatabaseOperationError
+):
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={"detail": exc.message, "error_type": "database_error"},
+    )
+
+
+@app.exception_handler(SupabaseConfigurationError)
+async def supabase_configuration_error_handler(
+    request: Request, exc: SupabaseConfigurationError
+):
+    return JSONResponse(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        content={"detail": exc.message, "error_type": "service_unavailable"},
+    )
+
+
 # Include routes both under /tasks (per assignment spec) and /api/v1/tasks (versioned)
 app.include_router(tasks.router)
 app.include_router(tasks.router, prefix=settings.api_v1_prefix)
@@ -80,4 +112,9 @@ app.include_router(tasks.router, prefix=settings.api_v1_prefix)
 
 @app.get("/health", tags=["Health"])
 def health_check():
-    return {"status": "healthy", "service": settings.app_name}
+    return {
+        "status": "healthy",
+        "service": settings.app_name,
+        "supabase_configured": settings.is_supabase_configured,
+        "environment": settings.app_env,
+    }

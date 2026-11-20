@@ -75,17 +75,86 @@ export function calculateCompletionPercentage(
 /**
  * Validates that an object conforms to the minimum Task interface at runtime.
  */
-function isValidTask(item: unknown): item is Task {
-  if (!item || typeof item !== 'object') return false;
-  const t = item as Record<string, unknown>;
-  return (
-    typeof t.id === 'string' &&
-    typeof t.companyId === 'string' &&
-    typeof t.title === 'string' &&
-    typeof t.status === 'string' &&
-    typeof t.priority === 'string' &&
-    typeof t.createdBy === 'string'
-  );
+function normalizeApiTask(item: unknown): Task | null {
+  if (!item || typeof item !== 'object') {
+    return null;
+  }
+
+  const raw = item as Record<string, unknown>;
+
+  // Convert Python snake_case fields into TypeScript camelCase.
+  const id = raw.id;
+  const companyId = raw.company_id ?? raw.companyId;
+  const title = raw.title;
+  const description = raw.description;
+  const status = raw.status;
+  const priority = raw.priority;
+
+  const assignedTo =
+    raw.assigned_to !== undefined
+      ? raw.assigned_to
+      : raw.assignedTo;
+
+  const createdBy = raw.created_by ?? raw.createdBy;
+
+  const dueDate =
+    raw.due_date !== undefined
+      ? raw.due_date
+      : raw.dueDate;
+
+  const createdAt = raw.created_at ?? raw.createdAt;
+  const updatedAt = raw.updated_at ?? raw.updatedAt;
+
+  const validStatuses = [
+    'pending',
+    'in_progress',
+    'completed',
+    'cancelled',
+  ];
+
+  const validPriorities = [
+    'low',
+    'medium',
+    'high',
+    'urgent',
+  ];
+
+  const isNullableString = (
+    value: unknown
+  ): value is string | null =>
+    value === null || typeof value === 'string';
+
+  if (
+    typeof id !== 'string' ||
+    typeof companyId !== 'string' ||
+    typeof title !== 'string' ||
+    !isNullableString(description) ||
+    typeof status !== 'string' ||
+    !validStatuses.includes(status) ||
+    typeof priority !== 'string' ||
+    !validPriorities.includes(priority) ||
+    !isNullableString(assignedTo) ||
+    typeof createdBy !== 'string' ||
+    !isNullableString(dueDate) ||
+    typeof createdAt !== 'string' ||
+    typeof updatedAt !== 'string'
+  ) {
+    return null;
+  }
+
+  return {
+    id,
+    companyId,
+    title,
+    description,
+    status: status as Task['status'],
+    priority: priority as Task['priority'],
+    assignedTo,
+    createdBy,
+    dueDate,
+    createdAt,
+    updatedAt,
+  };
 }
 
 /**
@@ -108,6 +177,7 @@ export async function fetchTasks(
     headers = {},
     signal,
     timeoutMs = 8000,
+    accessToken,
     customFetch = globalThis.fetch,
   } = options;
 
@@ -128,11 +198,19 @@ export async function fetchTasks(
   }
 
   if (params) {
-    Object.entries(params).forEach(([key, value]) => {
-      if (value !== undefined && value !== null) {
-        url.searchParams.set(key, String(value));
-      }
-    });
+    if (params.status !== undefined && params.status !== null) {
+      url.searchParams.set('status', params.status);
+    }
+    // Map camelCase assignedTo to backend snake_case assigned_to parameter
+    if (params.assignedTo !== undefined && params.assignedTo !== null) {
+      url.searchParams.set('assigned_to', params.assignedTo);
+    }
+    if (params.limit !== undefined && params.limit !== null) {
+      url.searchParams.set('limit', String(params.limit));
+    }
+    if (params.offset !== undefined && params.offset !== null) {
+      url.searchParams.set('offset', String(params.offset));
+    }
   }
 
   // Handle timeout coordination with user-provided signal
@@ -146,7 +224,7 @@ export async function fetchTasks(
   // If user passed a signal, abort if user signal aborts
   const cleanupUserSignal = signal
     ? () => signal.removeEventListener('abort', onUserAbort)
-    : () => {};
+    : () => { };
 
   function onUserAbort() {
     timeoutController.abort();
@@ -161,13 +239,19 @@ export async function fetchTasks(
   }
 
   try {
+    const requestHeaders: Record<string, string> = {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      ...headers,
+    };
+
+    if (accessToken) {
+      requestHeaders['Authorization'] = `Bearer ${accessToken.trim()}`;
+    }
+
     const response = await customFetch(url.toString(), {
       method: 'GET',
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-        ...headers,
-      },
+      headers: requestHeaders,
       signal: timeoutController.signal,
     });
 
@@ -217,10 +301,14 @@ export async function fetchTasks(
     const validTasks: Task[] = [];
 
     rawList.forEach((item, index) => {
-      if (isValidTask(item)) {
-        validTasks.push(item);
+      const normalizedTask = normalizeApiTask(item);
+
+      if (normalizedTask) {
+        validTasks.push(normalizedTask);
       } else {
-        invalidItems.push(`Item at index ${index} is missing required Task fields`);
+        invalidItems.push(
+          `Item at index ${index} is missing required Task fields`
+        );
       }
     });
 
